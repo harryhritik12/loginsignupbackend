@@ -18,11 +18,6 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
 }));
-app.use((req, res, next) => {
-  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
-  next();
-});
-
 
 app.use(session({
     secret: process.env.SESSION_SECRET,
@@ -35,8 +30,8 @@ app.use(passport.session());
 
 // ✅ MongoDB Connection
 mongoose.connect(process.env.MONGO_URI)
-    .then(() => console.log("MongoDB connected"))
-    .catch((err) => console.log("MongoDB connection error:", err));
+    .then(() => console.log("✅ MongoDB connected"))
+    .catch((err) => console.log("❌ MongoDB connection error:", err));
 
 // ✅ User Schema
 const UserSchema = new mongoose.Schema({
@@ -96,17 +91,6 @@ passport.use(new GoogleStrategy({
     async (accessToken, refreshToken, profile, done) => {
         try {
             let user = await User.findOne({ email: profile.emails[0].value });
-
-            if (!user) {
-                user = new User({
-                    firstName: profile.name.givenName,
-                    lastName: profile.name.familyName,
-                    email: profile.emails[0].value,
-                    googleId: profile.id
-                });
-
-                await user.save();
-            }
             done(null, user);
         } catch (error) {
             done(error, null);
@@ -124,7 +108,49 @@ passport.deserializeUser(async (id, done) => {
     done(null, user);
 });
 
-// ✅ Google Auth Routes
+// ✅ Google Signup Route (Only for new users)
+app.post("/auth/google/signup", async (req, res) => {
+    try {
+        const { email, firstName, lastName, googleId } = req.body;
+        const existingUser = await User.findOne({ email });
+
+        if (existingUser) {
+            return res.status(400).json({ message: "User already exists. Please log in." });
+        }
+
+        const newUser = new User({ firstName, lastName, email, googleId });
+        await newUser.save();
+
+        const token = jwt.sign({ userId: newUser._id }, process.env.JWT_SECRET, { expiresIn: "1h" });
+        res.json({ token, user: newUser });
+    } catch (error) {
+        res.status(500).json({ message: "Google signup failed" });
+    }
+});
+
+// ✅ Google Login Route (Only for existing users)
+app.post("/auth/google/login", async (req, res) => {
+    try {
+        const { email, googleId } = req.body;
+        const user = await User.findOne({ email });
+
+        if (!user) {
+            return res.status(400).json({ message: "No account found. Please sign up first." });
+        }
+
+        // Ensure the Google ID matches
+        if (user.googleId !== googleId) {
+            return res.status(400).json({ message: "Google authentication mismatch." });
+        }
+
+        const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "1h" });
+        res.json({ token, user });
+    } catch (error) {
+        res.status(500).json({ message: "Google login failed" });
+    }
+});
+
+// ✅ Google OAuth Redirect Routes
 app.get("/auth/google",
     passport.authenticate("google", { scope: ["profile", "email"] })
 );
@@ -135,24 +161,6 @@ app.get("/auth/google/callback",
         res.redirect("http://localhost:3000/dashboard");
     }
 );
-
-// ✅ Google Signup Route (Frontend Calls This)
-app.post("/auth/google", async (req, res) => {
-    try {
-        const { email, firstName, lastName, googleId } = req.body;
-        let user = await User.findOne({ email });
-
-        if (!user) {
-            user = new User({ firstName, lastName, email, googleId });
-            await user.save();
-        }
-
-        const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "1h" });
-        res.json({ token, user });
-    } catch (error) {
-        res.status(500).json({ message: "Google authentication failed" });
-    }
-});
 
 // ✅ Logout Route
 app.get("/logout", (req, res) => {
