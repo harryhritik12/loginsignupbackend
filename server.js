@@ -27,7 +27,12 @@ app.use((req, res, next) => {
 app.use(session({
     secret: process.env.SESSION_SECRET,
     resave: false,
-    saveUninitialized: false
+    saveUninitialized: false,
+    store: MongoStore.create({
+        mongoUrl: process.env.MONGO_URI,
+        collectionName: 'sessions',
+        ttl: 14 * 24 * 60 * 60 
+    })
 }));
 
 app.use(passport.initialize());
