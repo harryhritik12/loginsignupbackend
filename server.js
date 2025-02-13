@@ -8,19 +8,22 @@ const session = require("express-session");
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const MongoStore = require("connect-mongo");
-const { OAuth2Client } = require("google-auth-library");
 
 dotenv.config();
-const app = express();
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+const app = express();
 app.use(express.json());
 app.use(cors({
-    origin: ["http://localhost:3000", "https://your-frontend-url.com"],
+    origin: ["http://localhost:3000", "https://auth-tan-psi.vercel.app"],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
 }));
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  next();
+});
+
 
 app.use(session({
     secret: process.env.SESSION_SECRET,
@@ -46,7 +49,11 @@ const UserSchema = new mongoose.Schema({
     firstName: String,
     lastName: String,
     email: { type: String, unique: true },
+    mobile: String,
     password: String,
+    countryCode: String,
+    gender: String,
+    dob: String,
     googleId: String
 });
 
@@ -55,12 +62,12 @@ const User = mongoose.model("User", UserSchema);
 // ✅ Signup Route (Email/Password)
 app.post("/signup", async (req, res) => {
     try {
-        const { firstName, lastName, email, password } = req.body;
+        const { firstName, lastName, email, mobile, password, countryCode, gender, dob } = req.body;
         const existingUser = await User.findOne({ email });
         if (existingUser) return res.status(400).json({ message: "User already exists" });
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = new User({ firstName, lastName, email, password: hashedPassword });
+        const newUser = new User({ firstName, lastName, email, mobile, password: hashedPassword, countryCode, gender, dob });
 
         await newUser.save();
         res.status(201).json({ message: "User created successfully" });
@@ -86,7 +93,7 @@ app.post("/login", async (req, res) => {
     }
 });
 
-// ✅ Google OAuth Strategy (Passport)
+// ✅ Google OAuth Strategy
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
@@ -113,23 +120,32 @@ passport.use(new GoogleStrategy({
     }
 ));
 
-// ✅ Google Signup Route (Secure)
+// ✅ Serialize & Deserialize User
+passport.serializeUser((user, done) => {
+    done(null, user.id);
+});
+
+passport.deserializeUser(async (id, done) => {
+    const user = await User.findById(id);
+    done(null, user);
+});
+
+// ✅ Google Auth Routes
+app.get("/auth/google",
+    passport.authenticate("google", { scope: ["profile", "email"] })
+);
+
+app.get("/auth/google/callback",
+    passport.authenticate("google", { failureRedirect: "/login" }),
+    (req, res) => {
+        res.redirect("http://localhost:3000/dashboard");
+    }
+);
+
+// ✅ Google Signup Route (Frontend Calls This)
 app.post("/auth/google", async (req, res) => {
     try {
-        const { credential } = req.body; // Get the Google ID Token
-
-        // Verify the ID Token
-        const ticket = await client.verifyIdToken({
-            idToken: credential,
-            audience: process.env.GOOGLE_CLIENT_ID,
-        });
-
-        const payload = ticket.getPayload();
-        const email = payload.email;
-        const firstName = payload.given_name;
-        const lastName = payload.family_name;
-        const googleId = payload.sub;
-
+        const { email, firstName, lastName, googleId } = req.body;
         let user = await User.findOne({ email });
 
         if (!user) {
@@ -140,7 +156,6 @@ app.post("/auth/google", async (req, res) => {
         const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "1h" });
         res.json({ token, user });
     } catch (error) {
-        console.error("Google authentication failed:", error);
         res.status(500).json({ message: "Google authentication failed" });
     }
 });
