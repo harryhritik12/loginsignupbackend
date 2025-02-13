@@ -19,11 +19,6 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
 }));
-app.use((req, res, next) => {
-  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
-  next();
-});
-
 
 app.use(session({
     secret: process.env.SESSION_SECRET,
@@ -59,15 +54,21 @@ const UserSchema = new mongoose.Schema({
 
 const User = mongoose.model("User", UserSchema);
 
-// ✅ Signup Route (Email/Password)
+// ✅ Separate Signup Route (Email/Password)
 app.post("/signup", async (req, res) => {
     try {
         const { firstName, lastName, email, mobile, password, countryCode, gender, dob } = req.body;
         const existingUser = await User.findOne({ email });
-        if (existingUser) return res.status(400).json({ message: "User already exists" });
+
+        if (existingUser) {
+            return res.status(400).json({ message: "User already exists, please log in." });
+        }
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = new User({ firstName, lastName, email, mobile, password: hashedPassword, countryCode, gender, dob });
+        const newUser = new User({
+            firstName, lastName, email, mobile, 
+            password: hashedPassword, countryCode, gender, dob 
+        });
 
         await newUser.save();
         res.status(201).json({ message: "User created successfully" });
@@ -76,11 +77,12 @@ app.post("/signup", async (req, res) => {
     }
 });
 
-// ✅ Login Route (Email/Password)
+// ✅ Separate Login Route (Email/Password)
 app.post("/login", async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await User.findOne({ email });
+
         if (!user) return res.status(400).json({ message: "User not found" });
 
         const isMatch = await bcrypt.compare(password, user.password);
@@ -101,7 +103,7 @@ passport.use(new GoogleStrategy({
 },
     async (accessToken, refreshToken, profile, done) => {
         try {
-            let user = await User.findOne({ email: profile.emails[0].value });
+            let user = await User.findOne({ googleId: profile.id });
 
             if (!user) {
                 user = new User({
@@ -130,7 +132,44 @@ passport.deserializeUser(async (id, done) => {
     done(null, user);
 });
 
-// ✅ Google Auth Routes
+// ✅ Separate Google Signup Route
+app.post("/google-signup", async (req, res) => {
+    try {
+        const { email, firstName, lastName, googleId } = req.body;
+        let user = await User.findOne({ email });
+
+        if (user) {
+            return res.status(400).json({ message: "User already exists, please log in." });
+        }
+
+        user = new User({ firstName, lastName, email, googleId });
+        await user.save();
+
+        const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "1h" });
+        res.json({ token, user });
+    } catch (error) {
+        res.status(500).json({ message: "Google signup failed" });
+    }
+});
+
+// ✅ Separate Google Login Route
+app.post("/google-login", async (req, res) => {
+    try {
+        const { email, googleId } = req.body;
+        let user = await User.findOne({ email });
+
+        if (!user || user.googleId !== googleId) {
+            return res.status(400).json({ message: "Invalid Google account" });
+        }
+
+        const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "1h" });
+        res.json({ token, user });
+    } catch (error) {
+        res.status(500).json({ message: "Google login failed" });
+    }
+});
+
+// ✅ Google OAuth Login Flow
 app.get("/auth/google",
     passport.authenticate("google", { scope: ["profile", "email"] })
 );
@@ -141,24 +180,6 @@ app.get("/auth/google/callback",
         res.redirect("http://localhost:3000/dashboard");
     }
 );
-
-// ✅ Google Signup Route (Frontend Calls This)
-app.post("/auth/google", async (req, res) => {
-    try {
-        const { email, firstName, lastName, googleId } = req.body;
-        let user = await User.findOne({ email });
-
-        if (!user) {
-            user = new User({ firstName, lastName, email, googleId });
-            await user.save();
-        }
-
-        const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "1h" });
-        res.json({ token, user });
-    } catch (error) {
-        res.status(500).json({ message: "Google authentication failed" });
-    }
-});
 
 // ✅ Logout Route
 app.get("/logout", (req, res) => {
