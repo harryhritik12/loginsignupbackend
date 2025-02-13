@@ -7,11 +7,14 @@ const jwt = require("jsonwebtoken");
 const session = require("express-session");
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
+const MongoStore = require("connect-mongo");  // ✅ MongoDB session store
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+
+// ✅ CORS Configuration
 app.use(cors({
     origin: ["http://localhost:3000", "https://auth-tan-psi.vercel.app"],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -19,19 +22,33 @@ app.use(cors({
     credentials: true
 }));
 
+// ✅ Fix Cross-Origin-Opener-Policy (Google OAuth fix)
+app.use((req, res, next) => {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');  
+    res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+});
+
+// ✅ MongoDB Connection
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+    .then(() => console.log("✅ MongoDB connected"))
+    .catch((err) => console.log("❌ MongoDB connection error:", err));
+
+// ✅ Use MongoDB to store session data (Fixes MemoryStore issue)
 app.use(session({
     secret: process.env.SESSION_SECRET,
     resave: false,
-    saveUninitialized: false
+    saveUninitialized: false,
+    store: MongoStore.create({
+        mongoUrl: process.env.MONGO_URI,
+        collectionName: "sessions",
+        ttl: 14 * 24 * 60 * 60  // Sessions expire in 14 days
+    })
 }));
 
 app.use(passport.initialize());
 app.use(passport.session());
-
-// ✅ MongoDB Connection
-mongoose.connect(process.env.MONGO_URI)
-    .then(() => console.log("✅ MongoDB connected"))
-    .catch((err) => console.log("❌ MongoDB connection error:", err));
 
 // ✅ User Schema
 const UserSchema = new mongoose.Schema({
